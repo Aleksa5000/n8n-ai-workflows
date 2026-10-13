@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Aleksa5000/n8n-ai-workflows/actions/workflows/ci.yml/badge.svg)](https://github.com/Aleksa5000/n8n-ai-workflows/actions/workflows/ci.yml)
 ![n8n 1.123](https://img.shields.io/badge/n8n-1.123-ea4b71)
-![License MIT](https://img.shields.io/badge/license-MIT-green)
+![License: All rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)
 
 **Three production-style n8n workflows that use an LLM (Claude by default, OpenAI is a node swap) without trusting it blindly: every model answer is schema-checked, every failure has a fallback, every integration has retries, and a shared error workflow tells you when something breaks.** Self-hostable, exported as plain JSON with no credentials inside, and runnable end to end on your laptop with **no accounts and no API keys** (demo mode).
 
@@ -263,4 +263,4 @@ I build n8n automations, LLM integrations and Python tooling for small teams: in
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+All rights reserved. This is a portfolio sample: you can read and run the code to evaluate my work, but you may not use it commercially, redistribute it or build on it without my written permission. See [LICENSE](LICENSE).
