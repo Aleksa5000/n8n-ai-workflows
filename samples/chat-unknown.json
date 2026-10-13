@@ -1,0 +1,8 @@
+{
+  "message": "What is the weather in Paris tomorrow?",
+  "session_id": "demo-session-2",
+  "history": [
+    { "role": "user", "content": "Hi" },
+    { "role": "assistant", "content": "Hello! How can I help?" }
+  ]
+}

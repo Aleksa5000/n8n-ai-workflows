@@ -1,0 +1,5 @@
+{
+  "from": "Accounts <billing@vendor.example>",
+  "subject": "Invoice 4411 is overdue",
+  "body": "Our records show invoice 4411 (EUR 1,200) is 14 days overdue. Can you confirm the payment date?"
+}

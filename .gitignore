@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+# n8n data if you switch the compose volume to a bind mount
+n8n_data/
+.n8n/
+*.cookie

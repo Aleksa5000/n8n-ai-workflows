@@ -1,0 +1,529 @@
+{
+  "name": "DEMO 02 Support chatbot (webhook + mock knowledge base)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "demo/support-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "678323a8-9596-5811-affa-c2aa778ed858",
+      "name": "Website widget (demo)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ],
+      "webhookId": "91fb2aa2-7840-50f1-8a1e-4e9b6780d6a7"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// One entry shape for both channels. route: process | reject_web | ignore\nconst MAX_QUESTION = 1000;\nconst item = $input.first().json;\nconst clean = (s) => String(s == null ? '' : s).replace(/\\s+/g, ' ').trim();\nlet out;\n\nif (item.message) {\n  // Telegram update\n  const t = item.message;\n  const text = clean(t.text);\n  out = {\n    channel: 'telegram',\n    session_id: 'tg-' + t.chat.id,\n    chat_id: String(t.chat.id),\n    user_name: [t.from && t.from.first_name, t.from && t.from.last_name].filter(Boolean).join(' '),\n    question: text.slice(0, MAX_QUESTION),\n    history: [], // add a memory node if the Telegram bot should remember earlier turns\n    route: text && !text.startsWith('/') ? 'process' : 'ignore', // commands and non-text updates are skipped\n  };\n} else {\n  // Website widget: POST { message, session_id?, history?, user?: { name } }\n  const b = item.body || {};\n  const question = clean(b.message);\n  const history = (Array.isArray(b.history) ? b.history : []).slice(-6).map((h) => ({\n    role: h && h.role === 'assistant' ? 'assistant' : 'user',\n    content: clean(h && h.content).slice(0, 500),\n  }));\n  out = {\n    channel: 'web',\n    session_id: clean(b.session_id).slice(0, 64) || 'web-' + Date.now(),\n    chat_id: '',\n    user_name: clean(b.user && b.user.name).slice(0, 80),\n    question,\n    history,\n    route: question && question.length <= MAX_QUESTION ? 'process' : 'reject_web',\n  };\n  if (out.route === 'reject_web') {\n    out.error = question ? `message is longer than ${MAX_QUESTION} characters` : 'message is required';\n  }\n}\nreturn [{ json: out }];\n"
+      },
+      "id": "750a7a09-f433-5d62-8502-ce0a186d9ef2",
+      "name": "Normalize message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1. Channels\nDEMO: POST {message} to /webhook/demo/support-chat.",
+        "height": 370,
+        "width": 440,
+        "color": 4
+      },
+      "id": "dc0979e9-9441-551b-b5a5-f4ad52af62b8",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        90
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "0f8c3885-692a-5c1b-a0a4-818b2a1d0eda",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "process",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "process"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "8ed646c1-ab29-5a12-bf48-42b361121bb2",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "reject_web",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reject_web"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6cae004e-1b24-5ea1-9afe-9487cd0ff7a4",
+      "name": "Route message",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { error: $json.error } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "={{ $env.WIDGET_ALLOWED_ORIGIN || '*' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "bd98e665-e6f5-5111-9bda-a31b21107676",
+      "name": "Reject invalid message",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        740,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.KB_SEARCH_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.KB_API_KEY || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ question: $json.question, top_k: 4 }) }}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "5db7ea86-0a9b-5765-9ac5-88453690c3c5",
+      "name": "Search knowledge base",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        740,
+        240
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Understands two knowledge-base shapes and keeps only passages that score above KB_MIN_SCORE:\n//   1. JSON { results: [{ text, source, score }] }  (the mock service, or any small search endpoint)\n//   2. docs-rag-assistant POST /api/chat server-sent events: the \"sources\" event carries the passages\nconst q = $('Normalize message').first().json;\nconst MIN_SCORE = Number($env.KB_MIN_SCORE || 0.4);\nconst MAX_PASSAGES = 4;\nconst res = $input.first().json;\nlet hits = [];\nlet kbError = '';\n\nfunction sseSources(text) {\n  for (const block of text.split(/\\r?\\n\\r?\\n/)) {\n    if (!/^event:\\s*sources/m.test(block)) continue;\n    const line = block.split(/\\r?\\n/).find((l) => l.startsWith('data:'));\n    if (line) return JSON.parse(line.slice(5).trim()).sources || [];\n  }\n  return [];\n}\n\ntry {\n  if (res.error) throw new Error(typeof res.error === 'string' ? res.error : res.error.message || 'request failed');\n  const raw = typeof res.data === 'string' ? res.data.trim() : JSON.stringify(res);\n  if (raw.startsWith('{')) {\n    const j = JSON.parse(raw);\n    hits = (j.results || j.sources || []).map((r) => ({ text: r.text, source: r.source || r.filename || r.title || 'kb', score: Number(r.score) }));\n  } else if (raw.includes('event: sources')) {\n    hits = sseSources(raw).map((r) => ({ text: r.text, source: r.filename + (r.page ? ', p.' + r.page : ''), score: Number(r.score) }));\n  }\n} catch (e) {\n  kbError = String(e.message || e).slice(0, 300);\n}\n\nhits.sort((a, b) => b.score - a.score);\nconst context = hits\n  .filter((h) => h.text && h.score >= MIN_SCORE)\n  .slice(0, MAX_PASSAGES)\n  .map((h, i) => ({ n: i + 1, ...h }));\n// Escaped so a passage cannot close the tag or fake an instruction block; the prompt treats it as data.\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nreturn [\n  {\n    json: {\n      ...q,\n      kb_error: kbError,\n      has_context: context.length > 0,\n      top_score: context.length ? context[0].score : 0,\n      best_score: hits.length ? hits[0].score : 0, // best passage even if it was below the threshold\n      min_score: MIN_SCORE,\n      context,\n      context_text: context.map((c) => `<passage id=\"${c.n}\" source=\"${esc(c.source)}\">\\n${esc(c.text)}\\n</passage>`).join('\\n'),\n    },\n  },\n];\n"
+      },
+      "id": "bd86c894-f16a-526a-b5d6-c914f30bd2cc",
+      "name": "Parse KB response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f36b7e96-7298-5fdd-8092-2d281e710771",
+              "leftValue": "={{ $json.has_context }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4807e773-b623-5a1a-80f8-c89260173169",
+      "name": "Has context?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1220,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Demo only (no LLM): \"answer\" with the best passage, in the same shape the Claude step returns.\n// The score is capped at 1 because some backends (BM25) are not 0..1.\nconst kb = $input.first().json;\nconst top = kb.context[0];\nreturn [{ json: { output: { answer: `${top.text} (source: ${top.source})`, confidence: Math.min(1, top.score), answerable: true, sources: [top.n] } } }];\n"
+      },
+      "id": "53976771-337c-5e74-8939-40f8d4e5a1ee",
+      "name": "Extractive answer (no LLM)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Answer only when the knowledge base had context AND the model returned a valid, answerable,\n// confident result. Everything else becomes \"I'm not sure\" plus an escalation to a human.\nconst NOT_SURE = \"I'm not sure about that one. I've passed your question to our team and someone will follow up with you shortly.\";\nconst MIN_CONFIDENCE = Number($env.ANSWER_MIN_CONFIDENCE || 0.6);\nconst kb = $('Parse KB response').first().json;\n\nfunction parse(raw) {\n  if (typeof raw !== 'string') return raw;\n  const m = raw.match(/\\{[\\s\\S]*\\}/);\n  if (!m) return null;\n  try {\n    return JSON.parse(m[0]);\n  } catch (e) {\n    return null;\n  }\n}\n\nlet answer = null;\nlet confidence = 0;\nlet reason = '';\n\nif (!kb.has_context) {\n  if (kb.kb_error) reason = 'knowledge base unavailable: ' + kb.kb_error;\n  else if (kb.best_score > 0) reason = `no passage scored above ${kb.min_score} (best: ${kb.best_score})`;\n  else reason = 'no relevant context found';\n} else {\n  const item = $input.first().json;\n  const c = parse(item.output !== undefined ? item.output : item);\n  const valid =\n    c && typeof c === 'object' && typeof c.answer === 'string' &&\n    typeof c.answerable === 'boolean' && typeof c.confidence === 'number' && c.confidence >= 0 && c.confidence <= 1;\n  if (!valid) {\n    reason = 'invalid model output';\n  } else {\n    confidence = c.confidence;\n    if (!c.answerable) reason = 'the context does not answer the question';\n    else if (!c.answer.trim()) reason = 'invalid model output';\n    else if (confidence < MIN_CONFIDENCE) reason = `low confidence (${confidence})`;\n    else answer = c.answer.trim().slice(0, 1500);\n  }\n}\n\nconst escalate = answer === null;\nconst reply_text = escalate ? NOT_SURE : answer;\nconst conversation = kb.history\n  .map((h) => `${h.role === 'assistant' ? 'Bot' : 'Customer'}: ${h.content}`)\n  .concat(`Customer: ${kb.question}`, `Bot: ${reply_text}`)\n  .join('\\n');\n\nreturn [\n  {\n    json: {\n      channel: kb.channel,\n      session_id: kb.session_id,\n      chat_id: kb.chat_id,\n      user_name: kb.user_name,\n      question: kb.question,\n      reply_text,\n      answered: !escalate,\n      escalate,\n      escalate_reason: reason,\n      confidence,\n      sources: escalate ? [] : [...new Set(kb.context.map((c) => c.source))],\n      slack_text:\n        `*Support bot could not answer* (${reason})\\n` +\n        `Channel: ${kb.channel} | Session: ${kb.session_id}${kb.user_name ? ' | ' + kb.user_name : ''}\\n\\n` +\n        `*Conversation*\\n${conversation}`,\n      logged_at: $now.toISO(),\n    },\n  },\n];\n"
+      },
+      "id": "07e7e0cb-9048-506e-83f0-f9746e2b8d66",
+      "name": "Decide reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Retrieve, then answer from context only\nThe knowledge-base URL is configurable (KB_SEARCH_URL): the mock service, docs-rag-assistant or any search API. No context, an invalid model answer or low confidence all end in \"I'm not sure\" plus an escalation.",
+        "height": 730,
+        "width": 940,
+        "color": 7
+      },
+      "id": "d2b0c986-a63e-59f0-a326-da8e59c096e7",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        430,
+        -70
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { answer: $json.reply_text, answered: $json.answered, escalated: $json.escalate, confidence: $json.confidence, sources: $json.sources, reason: $json.escalate_reason } }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "={{ $env.WIDGET_ALLOWED_ORIGIN || '*' }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "68ff52c6-63e4-5f53-8ed2-46941bfebbe6",
+      "name": "Reply to website widget",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1820,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8319ce9e-aa29-586e-88dc-82d64cbce46e",
+              "leftValue": "={{ $json.escalate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a58aca43-03ae-5f1a-a266-b9a2e0540be5",
+      "name": "Needs escalation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1820,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/slack' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#support-escalations', text: $json.slack_text }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "d54a52f2-ce92-5987-8c3a-b238e2389d88",
+      "name": "Escalate (mock Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2080,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/sheets/support_qa/rows' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"Logged At\": $json.logged_at, \"Channel\": $json.channel, \"Session\": $json.session_id, \"User\": $json.user_name, \"Question\": $json.question, \"Answer\": $json.reply_text, \"Answered\": $json.answered, \"Confidence\": $json.confidence, \"Escalated\": $json.escalate, \"Reason\": $json.escalate_reason, \"Sources\": $json.sources.join(', ') }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "3c49f9d8-f634-558f-a3b2-bbf44f712d67",
+      "name": "Log Q&A (mock sheet)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1820,
+        480
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "content": "## 3. Reply, escalate, log\nThe reply goes out first. Escalations post the whole conversation to Slack; every Q&A is logged.",
+        "height": 810,
+        "width": 720,
+        "color": 5
+      },
+      "id": "3276feb7-12e3-5663-9ec0-5fce016ec202",
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1510,
+        -110
+      ]
+    }
+  ],
+  "connections": {
+    "Website widget (demo)": {
+      "main": [
+        [
+          {
+            "node": "Normalize message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize message": {
+      "main": [
+        [
+          {
+            "node": "Route message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route message": {
+      "main": [
+        [
+          {
+            "node": "Search knowledge base",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject invalid message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search knowledge base": {
+      "main": [
+        [
+          {
+            "node": "Parse KB response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse KB response": {
+      "main": [
+        [
+          {
+            "node": "Has context?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has context?": {
+      "main": [
+        [
+          {
+            "node": "Extractive answer (no LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Decide reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extractive answer (no LLM)": {
+      "main": [
+        [
+          {
+            "node": "Decide reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide reply": {
+      "main": [
+        [
+          {
+            "node": "Reply to website widget",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Needs escalation?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Q&A (mock sheet)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs escalation?": {
+      "main": [
+        [
+          {
+            "node": "Escalate (mock Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "errorWorkflow": "n8nAiErrorHandle"
+  },
+  "id": "n8nAiDemoSupport",
+  "pinData": {}
+}

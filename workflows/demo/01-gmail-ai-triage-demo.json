@@ -1,0 +1,654 @@
+{
+  "name": "DEMO 01 Gmail AI triage (webhook + fake classifier)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "demo/email-triage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "aa5a41ba-fd30-592a-9334-791d5270b887",
+      "name": "Webhook: sample email",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "d4540260-b50e-58e3-9f2b-7972d18960c4"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Demo entry point: a sample email POSTed to the webhook is turned into the same fields\n// that \"Normalize email\" produces from the Gmail Trigger, so everything after this node is identical.\nconst b = $input.first().json.body || {};\nconst raw = String(b.from || '');\nconst m = raw.match(/^\\s*\"?([^\"<]*?)\"?\\s*<([^>]+)>\\s*$/); // \"Name <addr@x.com>\" or a bare address\n\nreturn [\n  {\n    json: {\n      message_id: String(b.message_id || 'demo-' + Date.now()),\n      thread_id: String(b.thread_id || 'thread-' + Date.now()),\n      from_email: (m ? m[2] : raw).trim().toLowerCase(),\n      from_name: m ? m[1].trim() : '',\n      subject: String(b.subject || '(no subject)').slice(0, 300),\n      body: String(b.body || '').slice(0, 6000),\n      received_at: new Date().toISOString(),\n      simulate: b.simulate_classifier || null, // lets the demo feed the validator bad \"LLM\" output on purpose\n    },\n  },\n];\n"
+      },
+      "id": "d62f758e-2aa7-59d4-978a-5e0221dbd164",
+      "name": "Normalize email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/classify' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from_email: $json.from_email, from_name: $json.from_name, subject: $json.subject, body: $json.body, simulate: $json.simulate }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "f3b5e388-abaf-5f14-80cd-b86c78f618f2",
+      "name": "Classify (fake classifier, no LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        480,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Never trust model output. Parse it, check it against the schema, and fall back to \"Routine\"\n// (no draft, flagged for a human) when anything is wrong. One result per email, in input order.\nconst CATEGORIES = ['Urgent', 'Important', 'Client', 'Billing', 'Routine', 'Informational', 'Low Value'];\nconst FALLBACK = 'Routine';\nconst emails = $('Normalize email').all();\n\nfunction parse(raw) {\n  if (typeof raw !== 'string') return raw;\n  const m = raw.match(/\\{[\\s\\S]*\\}/); // tolerate prose or code fences around the JSON\n  if (!m) return null;\n  try {\n    return JSON.parse(m[0]);\n  } catch (e) {\n    return null;\n  }\n}\n\nfunction check(c) {\n  if (!c || typeof c !== 'object' || Array.isArray(c)) return ['output is not a JSON object'];\n  const errors = [];\n  if (!CATEGORIES.includes(c.category)) errors.push('category must be one of ' + CATEGORIES.join(', '));\n  if (typeof c.confidence !== 'number' || !(c.confidence >= 0 && c.confidence <= 1)) errors.push('confidence must be a number from 0 to 1');\n  if (typeof c.summary !== 'string' || !c.summary.trim()) errors.push('summary must be a non-empty string');\n  if (typeof c.needs_reply !== 'boolean') errors.push('needs_reply must be a boolean');\n  if (typeof c.reply_draft !== 'string') errors.push('reply_draft must be a string');\n  return errors;\n}\n\nreturn $input.all().map((item, i) => {\n  const email = emails[i].json;\n  const raw = item.json.output !== undefined ? item.json.output : item.json;\n  const c = parse(raw);\n  const errors = check(c);\n  const ok = errors.length === 0;\n  const draft = ok && c.needs_reply ? c.reply_draft.trim().slice(0, 4000) : '';\n  return {\n    json: {\n      message_id: email.message_id,\n      thread_id: email.thread_id,\n      from_email: email.from_email,\n      from_name: email.from_name,\n      subject: email.subject,\n      received_at: email.received_at,\n      category: ok ? c.category : FALLBACK,\n      confidence: ok ? c.confidence : 0,\n      summary: ok ? c.summary.trim().slice(0, 300) : 'Automatic classification failed validation; please triage manually.',\n      reason: ok ? String(c.reason || '').slice(0, 200) : '',\n      needs_reply: draft.length > 0,\n      reply_draft: draft,\n      fallback: !ok,\n      validation_errors: errors.join('; '),\n    },\n  };\n});\n"
+      },
+      "id": "1daa3670-82fe-5711-b632-09a40d5327f1",
+      "name": "Validate classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1. Intake and AI classification\nDEMO: POST a sample email to /webhook/demo/email-triage. A keyword classifier (mock service) stands in for Claude; everything from 'Validate classification' on is identical to the production workflow.",
+        "height": 370,
+        "width": 980,
+        "color": 4
+      },
+      "id": "094e8443-b6ac-53de-aeae-beb56a76bbe6",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/sheets/triage/rows' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"Date\": $now.toFormat('yyyy-MM-dd'), \"Logged At\": $now.toISO(), \"Message ID\": $json.message_id, \"From\": $json.from_name ? $json.from_name + ' <' + $json.from_email + '>' : $json.from_email, \"Subject\": $json.subject, \"Category\": $json.category, \"Confidence\": $json.confidence, \"Summary\": $json.summary, \"Needs Reply\": $json.needs_reply, \"Fallback\": $json.fallback, \"Reason\": $json.reason }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "dba081d6-b1e8-5481-93e4-2e54d2062565",
+      "name": "Log to Sheets (mock)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1100,
+        40
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MOCK_BASE_URL + '/gmail/labels' }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "1d7aed07-9ec5-54f8-9f25-b90203cdf689",
+      "name": "Get Gmail labels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1100,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// $input holds every Gmail label (\"Get Gmail labels\" runs once). Gmail needs label IDs, not names.\nconst labels = $input.all().map((i) => i.json);\nconst idByName = Object.fromEntries(labels.map((l) => [l.name, l.id]));\n\nreturn $('Validate classification').all().map((item) => {\n  const label_name = 'AI/' + item.json.category;\n  return { json: { ...item.json, label_name, label_id: idByName[label_name] || '' } };\n});\n"
+      },
+      "id": "6b1f2e1b-204c-57e5-b1bf-0b389fb7628d",
+      "name": "Attach label ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "83e46802-3b62-5b38-9dbb-6a6bfd844d70",
+              "leftValue": "={{ !!$json.label_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c81e9c53-57ff-5e68-92a8-996d37a468c3",
+      "name": "Label found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1580,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/gmail/messages/' + $json.message_id + '/labels' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ labelIds: [$json.label_id] }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "83d267a8-22a2-55ef-a9e9-b7406c559738",
+      "name": "Apply label",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1820,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "38429972-539c-5ce4-81a4-d7a6cdba614b",
+              "leftValue": "={{ $json.needs_reply }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5d5c105f-b9de-5c26-8b9c-7e6ce448f2f8",
+      "name": "Needs a draft?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1100,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/gmail/drafts' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ thread_id: $json.thread_id, to: $json.from_email, subject: $json.subject.startsWith('Re:') ? $json.subject : 'Re: ' + $json.subject, body: $json.reply_draft }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "99e0c36c-ab72-5327-91a1-32db8c865c53",
+      "name": "Create draft (never sent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1340,
+        380
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e900f994-45c1-5e59-9fe7-5f813e872607",
+              "leftValue": "={{ $json.category === 'Urgent' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b0aa3fa0-40ee-56d9-ab11-2b1acf480acf",
+      "name": "Is Urgent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1100,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/slack' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#urgent-email', text: 'URGENT email from ' + ($json.from_name || $json.from_email) + '\\nSubject: ' + $json.subject + '\\n' + $json.summary }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "9593f8e4-7ebe-54d6-9922-73fa52645777",
+      "name": "Notify urgent (mock Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1340,
+        560
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'processed', message_id: $json.message_id, category: $json.category, confidence: $json.confidence, fallback: $json.fallback, validation_errors: $json.validation_errors, draft_created: $json.needs_reply, urgent_alert_sent: $json.category === 'Urgent' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "485d6fd7-8d90-5c42-8aa4-28734b07478f",
+      "name": "Respond with result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1100,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Actions: drafts only, nothing is ever sent\nLog first so no email is lost if a later step fails. Then label, draft a reply and alert on Urgent. The branches run top to bottom.",
+        "height": 1090,
+        "width": 920,
+        "color": 7
+      },
+      "id": "c1a82fba-6ba4-52e9-8a38-4f1207a0b686",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        -110
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "demo/triage-summary",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d31ec5ab-a6c7-52af-b5fc-d16f0f10bcb0",
+      "name": "Webhook: digest",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1100
+      ],
+      "webhookId": "e0ebb437-21a0-5bc5-9727-3bc1f29e8776"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.MOCK_BASE_URL + '/sheets/triage/rows' }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "f50bf8eb-f874-5c58-8778-797088ea7eda",
+      "name": "Read today's rows (mock sheet)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        240,
+        1100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Reduce today's rows of the triage log to the numbers the digest needs.\nconst today = $now.toFormat('yyyy-MM-dd');\nconst truthy = (v) => String(v).toLowerCase() === 'true';\nconst rows = $input.all().map((i) => i.json).filter((r) => r['Date'] === today);\n\nconst counts = {};\nfor (const r of rows) counts[r['Category']] = (counts[r['Category']] || 0) + 1;\n\nreturn [\n  {\n    json: {\n      date: today,\n      total: rows.length,\n      counts,\n      needs_reply: rows.filter((r) => truthy(r['Needs Reply'])).length,\n      fallbacks: rows.filter((r) => truthy(r['Fallback'])).length,\n      urgent: rows\n        .filter((r) => r['Category'] === 'Urgent')\n        .slice(0, 10)\n        .map((r) => ({ from: r['From'], subject: r['Subject'], summary: r['Summary'] })),\n    },\n  },\n];\n"
+      },
+      "id": "24a62a9f-700a-5e2e-b059-27bf542d45a3",
+      "name": "Build digest data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Demo only: the production workflow asks Claude to write the digest; here it is a plain template.\nconst d = $input.first().json;\nconst lines = [`Daily inbox digest for ${d.date}: ${d.total} emails triaged.`];\nconst parts = Object.entries(d.counts).map(([k, v]) => `${k}: ${v}`);\nif (parts.length) lines.push(parts.join(', '));\nlines.push(`${d.needs_reply} need a reply (drafts are waiting in Gmail), ${d.fallbacks} fell back to Routine.`);\nfor (const u of d.urgent) lines.push(`URGENT - ${u.from}: ${u.subject}`);\nreturn [{ json: { ...d, text: lines.join('\\n') } }];\n"
+      },
+      "id": "49e898f4-31fc-5a3d-80b1-33e62175d5e4",
+      "name": "Compose digest (no LLM)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/slack' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#email-digest', text: $json.text }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "eca78106-eea3-576a-a887-a5432e0617d4",
+      "name": "Post digest (mock Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        960,
+        1060
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'digest posted', total: $json.total, text: $json.text } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "47b1bd37-119d-5b4d-9582-cc6e2a6d16c3",
+      "name": "Respond with digest",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        960,
+        1220
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Daily digest\nDEMO: GET /webhook/demo/triage-summary reads the mock sheet and posts a digest to mock Slack (template text, no LLM).",
+        "height": 530,
+        "width": 1160,
+        "color": 5
+      },
+      "id": "d9bcffa3-71ae-53a7-92ae-5b98f08635cc",
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        910
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook: sample email": {
+      "main": [
+        [
+          {
+            "node": "Normalize email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize email": {
+      "main": [
+        [
+          {
+            "node": "Classify (fake classifier, no LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify (fake classifier, no LLM)": {
+      "main": [
+        [
+          {
+            "node": "Validate classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate classification": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheets (mock)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Gmail labels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Needs a draft?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Urgent?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond with result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Gmail labels": {
+      "main": [
+        [
+          {
+            "node": "Attach label ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach label ID": {
+      "main": [
+        [
+          {
+            "node": "Label found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label found?": {
+      "main": [
+        [
+          {
+            "node": "Apply label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs a draft?": {
+      "main": [
+        [
+          {
+            "node": "Create draft (never sent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Urgent?": {
+      "main": [
+        [
+          {
+            "node": "Notify urgent (mock Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook: digest": {
+      "main": [
+        [
+          {
+            "node": "Read today's rows (mock sheet)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read today's rows (mock sheet)": {
+      "main": [
+        [
+          {
+            "node": "Build digest data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build digest data": {
+      "main": [
+        [
+          {
+            "node": "Compose digest (no LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose digest (no LLM)": {
+      "main": [
+        [
+          {
+            "node": "Post digest (mock Slack)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond with digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "errorWorkflow": "n8nAiErrorHandle"
+  },
+  "id": "n8nAiDemoTriage0",
+  "pinData": {}
+}

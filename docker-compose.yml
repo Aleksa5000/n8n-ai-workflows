@@ -1,0 +1,67 @@
+# Demo stack: n8n (pinned) + a tiny FastAPI "mock-services" container. No accounts or API keys needed.
+# Ports are bound to loopback only. For production, see README > "Production setup".
+name: n8n-ai-workflows
+
+services:
+  n8n:
+    image: n8nio/n8n:1.123.84 # last 1.x line; pinned so the exports always import cleanly
+    ports:
+      - "127.0.0.1:${N8N_HOST_PORT:-5679}:5678"
+    environment:
+      # --- n8n itself -------------------------------------------------------------------------------------------
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-UTC}
+      - TZ=${GENERIC_TIMEZONE:-UTC}
+      - WEBHOOK_URL=http://127.0.0.1:${N8N_HOST_PORT:-5679}/
+      - N8N_EDITOR_BASE_URL=http://127.0.0.1:${N8N_HOST_PORT:-5679}
+      - N8N_SECURE_COOKIE=false # plain http on loopback; remove behind HTTPS
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false # the workflows read their settings from $$env.*
+      - N8N_RUNNERS_ENABLED=true # Code nodes run in the task runner (the default from n8n 2.0)
+      - DB_SQLITE_POOL_SIZE=5
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+      # --- workflow settings (defaults point at the mock service = demo mode) -------------------------------------
+      - MOCK_BASE_URL=http://mock-services:8795
+      - ERROR_ALERT_CHANNEL=${ERROR_ALERT_CHANNEL:-demo}
+      - KB_SEARCH_URL=${KB_SEARCH_URL:-http://mock-services:8795/kb/search}
+      - KB_API_KEY=${KB_API_KEY:-}
+      - KB_MIN_SCORE=${KB_MIN_SCORE:-0.4}
+      - ANSWER_MIN_CONFIDENCE=${ANSWER_MIN_CONFIDENCE:-0.6}
+      - CRM_BASE_URL=${CRM_BASE_URL:-http://mock-services:8795}
+      - LEAD_WEBHOOK_SECRET=${LEAD_WEBHOOK_SECRET:-}
+      - DEDUPE_WINDOW_MIN=${DEDUPE_WINDOW_MIN:-60}
+      - LEAD_HOT_SCORE=${LEAD_HOT_SCORE:-70}
+      - LEAD_WARM_SCORE=${LEAD_WARM_SCORE:-40}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-5-5}
+      - NOTIFY_CHANNEL=${NOTIFY_CHANNEL:-slack}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - SLACK_CHANNEL_EMAIL=${SLACK_CHANNEL_EMAIL:-}
+      - SLACK_CHANNEL_SUPPORT=${SLACK_CHANNEL_SUPPORT:-}
+      - SLACK_CHANNEL_LEADS=${SLACK_CHANNEL_LEADS:-}
+      - SLACK_CHANNEL_ALERTS=${SLACK_CHANNEL_ALERTS:-}
+      - TRIAGE_SHEET_ID=${TRIAGE_SHEET_ID:-}
+      - SUPPORT_SHEET_ID=${SUPPORT_SHEET_ID:-}
+      - WIDGET_ALLOWED_ORIGIN=${WIDGET_ALLOWED_ORIGIN:-*}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    depends_on:
+      mock-services:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  mock-services:
+    build: ./mock-services
+    ports:
+      - "127.0.0.1:${MOCK_HOST_PORT:-8795}:8795"
+
+volumes:
+  n8n_data:

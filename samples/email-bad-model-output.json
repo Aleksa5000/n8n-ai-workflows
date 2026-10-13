@@ -1,0 +1,6 @@
+{
+  "from": "Bo Lee <bo@example.com>",
+  "subject": "Hello",
+  "body": "Just checking in.",
+  "simulate_classifier": "invalid_category"
+}

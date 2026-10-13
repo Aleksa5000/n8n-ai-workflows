@@ -1,0 +1,248 @@
+{
+  "name": "00 Error handler (shared)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "02e97cf2-1323-5143-b63b-d1ffaa3e297e",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Turn the Error Trigger payload into one readable alert.\n// Failures of a trigger node itself arrive as \"trigger\" instead of \"execution\".\nconst e = $input.first().json;\nconst wf = e.workflow || {};\nconst ex = e.execution || {};\nconst err = ex.error || (e.trigger || {}).error || {};\nconst node = ex.lastNodeExecuted || (err.node && err.node.name) || 'unknown';\nconst message = String(err.message || 'unknown error').slice(0, 500);\nconst url = ex.url || '(no execution URL: the trigger failed before an execution was created)';\nconst text = [\n  `[n8n ALERT] Workflow failed: ${wf.name || 'unknown'}`,\n  `Failed node: ${node}`,\n  `Error: ${message}`,\n  `Execution: ${url}`,\n  `Mode: ${ex.mode || 'trigger'}`,\n].join('\\n');\nreturn [{ json: { text, workflow: wf.name || 'unknown', node, message, execution_url: url } }];\n"
+      },
+      "id": "179c078c-3d6c-5fa2-abcc-f066e86f4dbb",
+      "name": "Format alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "b4eeb234-54dd-5c2b-b6be-32be4ee5dbe3",
+                    "leftValue": "={{ $env.ERROR_ALERT_CHANNEL }}",
+                    "rightValue": "telegram",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "telegram"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "65eabd89-7077-5519-92a9-460946f60bc9",
+                    "leftValue": "={{ $env.ERROR_ALERT_CHANNEL }}",
+                    "rightValue": "demo",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "demo"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "5b6bfdaf-859f-596f-934c-158ddc87d2fd",
+      "name": "Alert channel",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "40869b6d-6528-5d46-9d26-0b01f1134396",
+      "name": "Alert via Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        740,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Credential needed: Telegram bot token (from @BotFather)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/slack' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#alerts', text: $json.text }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b0286045-bd17-55b3-9adb-9386114413b4",
+      "name": "Alert via mock Slack (demo)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        740,
+        260
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.SLACK_CHANNEL_ALERTS }}",
+          "mode": "id"
+        },
+        "messageType": "text",
+        "text": "={{ $json.text }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "2343740e-76bc-58cb-a372-6797e5addfb4",
+      "name": "Alert via Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        740,
+        420
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Credential needed: Slack (Access Token or OAuth2) with the chat:write scope."
+    },
+    {
+      "parameters": {
+        "content": "## Shared error workflow\nEvery other workflow points at this one (Settings > Error workflow). Choose the channel with ERROR_ALERT_CHANNEL = slack | telegram | demo (demo posts to the mock service).",
+        "height": 690,
+        "width": 940,
+        "color": 4
+      },
+      "id": "005589ac-29fb-51b3-8c84-c37f3572f78f",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        -50
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format alert": {
+      "main": [
+        [
+          {
+            "node": "Alert channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert channel": {
+      "main": [
+        [
+          {
+            "node": "Alert via Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert via mock Slack (demo)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert via Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 300
+  },
+  "id": "n8nAiErrorHandle",
+  "pinData": {}
+}

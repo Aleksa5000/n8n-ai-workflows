@@ -1,0 +1,725 @@
+{
+  "name": "DEMO 03 Lead intake (webhook + mock CRM)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "demo/lead-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "eeb54be6-c82c-5fff-aa9c-a45f411a90ce",
+      "name": "Lead form",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ],
+      "webhookId": "178edc19-e24c-5f6f-9caf-279de7a8804d"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Validate and normalise the form payload. Failures are answered with 401/422 by the next nodes.\nconst req = $input.first().json;\nconst b = req.body || {};\nconst secret = $env.LEAD_WEBHOOK_SECRET || '';\nconst clean = (s, max) => String(s == null ? '' : s).replace(/\\s+/g, ' ').trim().slice(0, max);\n\nif (secret && (req.headers || {})['x-webhook-secret'] !== secret) {\n  return [{ json: { ok: false, status_code: 401, errors: ['missing or invalid X-Webhook-Secret header'] } }];\n}\n\nconst errors = [];\nconst email = clean(b.email, 254).toLowerCase();\nif (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)) errors.push('email is missing or invalid');\nconst name = clean(b.name, 120);\nif (!name) errors.push('name is required');\nconst phone = clean(b.phone, 40).replace(/[^\\d+]/g, '');\nif (phone && !/^\\+?\\d{6,15}$/.test(phone)) errors.push('phone is invalid');\nif (errors.length) return [{ json: { ok: false, status_code: 422, errors } }];\n\nconst [firstname, ...rest] = name.split(' ');\nreturn [\n  {\n    json: {\n      ok: true,\n      lead: {\n        email,\n        name,\n        firstname,\n        lastname: rest.join(' '),\n        company: clean(b.company, 120),\n        phone,\n        message: String(b.message == null ? '' : b.message).trim().slice(0, 2000),\n        source: clean(b.source, 60) || 'web-form',\n        received_at: new Date().toISOString(),\n      },\n    },\n  },\n];\n"
+      },
+      "id": "7c15add4-0aa5-59bd-884e-6f3c6b48dea3",
+      "name": "Validate and normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2ca847ce-944d-50ce-82e7-72f2bc042926",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2498604d-bff5-5279-8c9c-94ffa22de4af",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'rejected', errors: $json.errors } }}",
+        "options": {
+          "responseCode": "={{ $json.status_code }}"
+        }
+      },
+      "id": "5f4b7589-d8e6-5ae4-a17f-5a4a52e832f9",
+      "name": "Reject (401 or 422)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        720,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Same email inside DEDUPE_WINDOW_MIN minutes = duplicate submission (double click, form retry).\n// This only READS the store; \"Finalize\" writes it after the CRM call succeeded, so a failed run never blocks a retry.\n// shortcut: workflow static data is per instance and not shared across queue-mode workers; use Redis, Postgres or Sheets at scale.\nconst input = $input.first().json;\nconst store = $getWorkflowStaticData('global');\nconst windowMs = Number($env.DEDUPE_WINDOW_MIN || 60) * 60000;\nconst prev = (store.leads || {})[input.lead.email];\nconst duplicate = Boolean(prev) && Date.now() - prev.ts < windowMs;\nreturn [{ json: { ...input, duplicate, previous_crm_id: prev ? prev.crm_id : '' } }];\n"
+      },
+      "id": "d0f6d15c-c20d-5f3d-b80f-ecd70ca52d98",
+      "name": "Dedupe check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "187c1b20-60e1-5ea6-8d2a-326fb9cd71e5",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "323523e0-3c13-5a6f-b59c-ab093fe3acd5",
+      "name": "Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        960,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'duplicate', email: $json.lead.email, crm_id: $json.previous_crm_id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3347e24e-910b-562f-9d53-9bbafb8be8c2",
+      "name": "Respond duplicate",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1200,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 1. Receive, validate, dedupe\nPOST a form payload. Invalid input gets 422, a wrong secret gets 401, and the same email inside the dedupe window gets {status: duplicate} without spending any LLM tokens.",
+        "height": 550,
+        "width": 1400,
+        "color": 4
+      },
+      "id": "4fb6e3c8-ca0d-5cdd-96aa-e409eab802e8",
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        -90
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/lead/score' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $json.lead.name, email: $json.lead.email, company: $json.lead.company, phone: $json.lead.phone, message: $json.lead.message, simulate: $json.lead.message.includes('[simulate-invalid]') ? 'invalid' : null }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "694b6b3a-d70b-5f25-8ff5-e70d6e88e367",
+      "name": "Score lead (fake scorer, no LLM)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        960,
+        660
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// The tier is derived from the number here, never taken from the model.\n// An invalid answer does NOT drop the lead: it is stored as \"unscored\" for a human to review.\nconst lead = $('Dedupe check').first().json.lead;\nconst HOT = Number($env.LEAD_HOT_SCORE || 70);\nconst WARM = Number($env.LEAD_WARM_SCORE || 40);\nconst item = $input.first().json;\n\nfunction parse(raw) {\n  if (typeof raw !== 'string') return raw;\n  const m = raw.match(/\\{[\\s\\S]*\\}/);\n  if (!m) return null;\n  try {\n    return JSON.parse(m[0]);\n  } catch (e) {\n    return null;\n  }\n}\n\nconst c = parse(item.output !== undefined ? item.output : item);\nconst valid =\n  c && typeof c === 'object' && typeof c.score === 'number' && Number.isFinite(c.score) &&\n  c.score >= 0 && c.score <= 100 && typeof c.reason === 'string' && c.reason.trim().length > 0;\nconst score = valid ? Math.round(c.score) : 0;\nconst tier = !valid ? 'unscored' : score >= HOT ? 'hot' : score >= WARM ? 'warm' : 'cold';\n\nreturn [\n  {\n    json: {\n      lead,\n      score,\n      tier,\n      reason: valid ? c.reason.trim().slice(0, 300) : 'AI scoring failed validation; review this lead manually.',\n      scoring_failed: !valid,\n    },\n  },\n];\n"
+      },
+      "id": "c8685b14-5754-512f-bc09-bf782ca79e4a",
+      "name": "Validate score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// HubSpot-style contact properties. Empty values are left out so an update never blanks existing CRM data.\n// ai_lead_score, ai_lead_tier, ai_lead_reason and lead_source are custom properties: create them in the CRM first.\nconst d = $input.first().json;\nconst l = d.lead;\nconst all = {\n  email: l.email,\n  firstname: l.firstname,\n  lastname: l.lastname,\n  company: l.company,\n  phone: l.phone,\n  message: l.message,\n  lead_source: l.source,\n  ai_lead_score: d.score,\n  ai_lead_tier: d.tier,\n  ai_lead_reason: d.reason,\n};\nconst crm_properties = Object.fromEntries(Object.entries(all).filter(([, v]) => v !== '' && v != null));\nreturn [{ json: { ...d, crm_properties } }];\n"
+      },
+      "id": "68c21866-a4b0-56ba-a82a-0d3b85cfd144",
+      "name": "Build CRM payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 2. Score with AI\nDEMO: a rule-based scorer in the mock service replaces Claude. Invalid output never drops the lead: it is stored as 'unscored'.",
+        "height": 370,
+        "width": 740,
+        "color": 7
+      },
+      "id": "f24de74b-0f24-5ff6-995c-16be0290647d",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        910,
+        510
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_BASE_URL }}/crm/v3/objects/contacts/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: $json.lead.email }] }], properties: ['email'], limit: 1 }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "1141ea65-c9f2-55a5-884c-d9e6582557ba",
+      "name": "Find contact in CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1740,
+        660
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Keep the payload and the CRM lookup result together, so the update/create nodes only need $json.\nconst payload = $('Build CRM payload').first().json;\nconst hit = (($input.first().json.results) || [])[0];\nreturn [{ json: { ...payload, crm_contact_id: hit ? hit.id : '' } }];\n"
+      },
+      "id": "648574fb-95dd-58ba-8329-c18edc0c029d",
+      "name": "Merge lookup result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ff86fdf1-baf6-542e-ac64-9a6d6b32a63d",
+              "leftValue": "={{ !!$json.crm_contact_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2a7fd5d7-8a47-56ee-a1fd-336b5fa64626",
+      "name": "Contact exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2220,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.CRM_BASE_URL }}/crm/v3/objects/contacts/{{ $json.crm_contact_id }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: $json.crm_properties }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "ca82b439-18e9-542a-b4cd-1449b946e429",
+      "name": "Update contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2460,
+        580
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_BASE_URL }}/crm/v3/objects/contacts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: $json.crm_properties }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "375f3db3-61c5-5ed2-926f-c0cbfd8226d8",
+      "name": "Create contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2460,
+        740
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Runs after the CRM create/update succeeded: remember the lead for dedupe and build the response.\nconst scored = $('Merge lookup result').first().json;\nconst crm = $input.first().json;\nconst store = $getWorkflowStaticData('global');\nstore.leads = store.leads || {};\nstore.leads[scored.lead.email] = { ts: Date.now(), crm_id: crm.id };\nfor (const [email, v] of Object.entries(store.leads)) {\n  if (Date.now() - v.ts > 7 * 24 * 3600 * 1000) delete store.leads[email]; // keeps the store small\n}\nreturn [\n  {\n    json: {\n      status: scored.crm_contact_id ? 'updated' : 'created',\n      crm_id: crm.id,\n      email: scored.lead.email,\n      name: scored.lead.name,\n      company: scored.lead.company,\n      score: scored.score,\n      tier: scored.tier,\n      reason: scored.reason,\n      scoring_failed: scored.scoring_failed,\n      source: scored.lead.source,\n    },\n  },\n];\n"
+      },
+      "id": "185d459c-d049-51bd-9a2b-667388982b9d",
+      "name": "Finalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'error', message: 'CRM unavailable: the lead was not saved, please retry.' } }}",
+        "options": {
+          "responseCode": 502
+        }
+      },
+      "id": "357e4d76-ee64-5bd3-afda-2ac616c05e88",
+      "name": "Tell caller: CRM unavailable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2460,
+        920
+      ]
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "={{ 'CRM request failed after retries: ' + ($json.error.message || $json.error) }}"
+      },
+      "id": "aeb546d1-532c-587a-9976-57ebf5e7bb11",
+      "name": "Fail execution (raises the alert)",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2700,
+        920
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: $json.status, crm_id: $json.crm_id, score: $json.score, tier: $json.tier, reason: $json.reason, scoring_failed: $json.scoring_failed } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "357b4c18-89c5-572b-8f4e-71d67e73a4a9",
+      "name": "Respond with result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2940,
+        580
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "066586e8-a6c5-5bd8-b7f0-eaad97b409b2",
+              "leftValue": "={{ $json.tier }}",
+              "rightValue": "hot",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "638af659-42ca-59d0-b5c7-85646b259f86",
+      "name": "Hot lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2940,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MOCK_BASE_URL + '/slack' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: '#hot-leads', text: 'HOT LEAD (' + $json.score + '/100): ' + $json.name + ' <' + $json.email + '> ' + $json.reason }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b4f8fb97-f493-55e0-8349-832274c5ee7d",
+      "name": "Alert hot lead (mock Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        3180,
+        740
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "content": "## 3. Upsert in the CRM, answer, alert on hot leads\nHubSpot v3 API shape; the base URL is configurable (CRM_BASE_URL). HTTP nodes make up to 3 attempts. If the CRM stays down the caller gets a 502 and the shared error workflow raises an alert.",
+        "height": 710,
+        "width": 1640,
+        "color": 5
+      },
+      "id": "113cfff8-c606-5ebb-95df-c562c5b164d1",
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1690,
+        430
+      ]
+    }
+  ],
+  "connections": {
+    "Lead form": {
+      "main": [
+        [
+          {
+            "node": "Validate and normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and normalize": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Dedupe check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401 or 422)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe check": {
+      "main": [
+        [
+          {
+            "node": "Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Respond duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Score lead (fake scorer, no LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score lead (fake scorer, no LLM)": {
+      "main": [
+        [
+          {
+            "node": "Validate score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate score": {
+      "main": [
+        [
+          {
+            "node": "Build CRM payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CRM payload": {
+      "main": [
+        [
+          {
+            "node": "Find contact in CRM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find contact in CRM": {
+      "main": [
+        [
+          {
+            "node": "Merge lookup result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tell caller: CRM unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge lookup result": {
+      "main": [
+        [
+          {
+            "node": "Contact exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contact exists?": {
+      "main": [
+        [
+          {
+            "node": "Update contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update contact": {
+      "main": [
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tell caller: CRM unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create contact": {
+      "main": [
+        [
+          {
+            "node": "Finalize",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Tell caller: CRM unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell caller: CRM unavailable": {
+      "main": [
+        [
+          {
+            "node": "Fail execution (raises the alert)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize": {
+      "main": [
+        [
+          {
+            "node": "Respond with result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Hot lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot lead?": {
+      "main": [
+        [
+          {
+            "node": "Alert hot lead (mock Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "errorWorkflow": "n8nAiErrorHandle"
+  },
+  "id": "n8nAiDemoLeads00",
+  "pinData": {}
+}

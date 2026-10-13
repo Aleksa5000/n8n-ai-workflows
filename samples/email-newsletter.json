@@ -1,0 +1,5 @@
+{
+  "from": "news@vendor.example",
+  "subject": "Monthly newsletter: release notes",
+  "body": "A digest of what is new this month. No action needed."
+}
